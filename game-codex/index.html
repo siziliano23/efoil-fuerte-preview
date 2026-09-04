@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#24b9d6">
+  <title>Efoil Fuerte — Fly La Pared!</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Bangers&family=Nunito:wght@800;900&display=swap');
+    :root{--ink:#17151b;--sky:#41c7e8;--teal:#10aeb2;--deep:#087a91;--sand:#f5c96a;--sun:#ffd52e;--coral:#ff5d50;--cream:#fff9df}
+    *{box-sizing:border-box}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sky);font-family:Nunito,Arial,sans-serif;touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+    #game{position:fixed;inset:0;overflow:hidden;outline:none;background:var(--sky);cursor:pointer}
+    #game:focus-visible{box-shadow:inset 0 0 0 5px var(--sun)}
+    canvas{display:block;width:100%;height:100%}
+    .hud{position:absolute;z-index:2;top:max(12px,env(safe-area-inset-top));left:14px;right:14px;display:flex;align-items:flex-start;justify-content:space-between;pointer-events:none;filter:drop-shadow(3px 4px 0 rgba(23,21,27,.22))}
+    .score{font-family:Bangers,Impact,sans-serif;font-size:clamp(25px,7vw,42px);line-height:.9;letter-spacing:1px;color:var(--cream);-webkit-text-stroke:2px var(--ink);paint-order:stroke fill}
+    .score small{display:block;font:900 10px/1 Nunito,sans-serif;letter-spacing:1.7px;color:var(--ink);-webkit-text-stroke:0;text-transform:uppercase;margin-bottom:5px}
+    .battery-wrap{width:min(42vw,190px);text-align:right}
+    .battery-label{font-size:10px;font-weight:900;letter-spacing:1.4px;text-transform:uppercase;margin:0 8px 5px 0;color:var(--ink)}
+    .battery{position:relative;height:26px;border:4px solid var(--ink);border-radius:7px;background:var(--cream);padding:3px;transform:rotate(1deg)}
+    .battery:after{content:"";position:absolute;right:-9px;top:6px;width:7px;height:9px;background:var(--ink);border-radius:0 3px 3px 0}
+    .battery-fill{height:100%;width:100%;background:var(--sun);border-radius:2px;transition:width .12s linear,background .2s}
+    .panel{position:absolute;z-index:3;inset:0;display:grid;place-items:center;padding:24px;background:rgba(14,91,112,.12);transition:opacity .18s}
+    .panel[hidden]{display:none}
+    .bubble{position:relative;width:min(88vw,440px);padding:25px 24px 22px;background:var(--cream);border:5px solid var(--ink);border-radius:48% 46% 44% 50%/18% 22% 20% 24%;text-align:center;box-shadow:9px 10px 0 rgba(23,21,27,.2);transform:rotate(-1deg)}
+    .bubble:after{content:"";position:absolute;left:17%;bottom:-24px;width:38px;height:38px;background:var(--cream);border-right:5px solid var(--ink);border-bottom:5px solid var(--ink);transform:skew(20deg) rotate(25deg);z-index:-1}
+    .eyebrow{display:inline-block;padding:4px 10px;margin:0 0 5px;background:var(--sun);border:3px solid var(--ink);transform:rotate(-2deg);font-size:11px;font-weight:900;letter-spacing:1.4px;text-transform:uppercase}
+    h1{font:clamp(52px,16vw,84px)/.78 Bangers,Impact,sans-serif;letter-spacing:2px;color:var(--coral);-webkit-text-stroke:3px var(--ink);paint-order:stroke fill;margin:8px 0 14px;text-shadow:4px 5px 0 var(--sun)}
+    h2{font:clamp(44px,14vw,72px)/.85 Bangers,Impact,sans-serif;letter-spacing:2px;color:var(--coral);-webkit-text-stroke:3px var(--ink);paint-order:stroke fill;margin:7px 0 12px}
+    .lead{margin:0 auto 15px;max-width:330px;font-size:clamp(15px,4vw,19px);font-weight:900;line-height:1.25}
+    .how{display:inline-flex;gap:8px;align-items:center;background:var(--teal);color:white;border:4px solid var(--ink);border-radius:30px;padding:9px 15px;box-shadow:3px 4px 0 var(--ink);font-weight:900;font-size:14px;transform:rotate(1deg)}
+    .tap{margin:18px 0 2px;font:26px/1 Bangers,Impact,sans-serif;letter-spacing:1.4px;animation:pulse .8s ease-in-out infinite alternate;color:var(--ink)}
+    .best{font-size:13px;font-weight:900;margin:8px 0 0;color:var(--deep)}
+    .credit{position:absolute;z-index:4;bottom:max(7px,env(safe-area-inset-bottom));left:0;right:0;text-align:center;font-size:9px;font-weight:900;letter-spacing:.55px;color:rgba(23,21,27,.72);pointer-events:none}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    @keyframes pulse{to{transform:scale(1.08) rotate(-1deg);color:var(--coral)}}
+    @media (prefers-reduced-motion:reduce){.tap{animation:none}.panel{transition:none}}
+    @media (max-height:600px){.bubble{padding:18px 20px}.lead{margin-bottom:10px}.tap{margin-top:12px}h1{font-size:48px}}
+  </style>
+</head>
+<body>
+  <main id="game" tabindex="0" role="button" aria-label="Efoil Fuerte game. Tap or hold to control the rider.">
+    <canvas id="canvas" aria-hidden="true"></canvas>
+    <div class="hud" aria-hidden="true">
+      <div class="score"><small>Distance</small><span id="metres">0</span> m</div>
+      <div class="battery-wrap"><div class="battery-label">Battery</div><div class="battery"><div class="battery-fill" id="batteryFill"></div></div></div>
+    </div>
+    <section class="panel" id="startPanel">
+      <div class="bubble">
+        <p class="eyebrow">La Pared presents</p>
+        <h1>Efoil<br>Fuerte!</h1>
+        <p class="lead">Fly the swell. Dodge the chaos. Keep that battery buzzing!</p>
+        <div class="how">☝ HOLD TO FLY · RELEASE TO DIP</div>
+        <p class="tap">TAP ANYWHERE TO RIDE!</p>
+        <p class="best" id="startBest">Best: 0 m</p>
+      </div>
+    </section>
+    <section class="panel" id="overPanel" hidden>
+      <div class="bubble">
+        <p class="eyebrow" id="overTag">Wipeout!</p>
+        <h2 id="overWord">SPLASH!</h2>
+        <p class="lead">You flew <strong id="finalScore">0 m</strong></p>
+        <div class="how">🏆 BEST: <span id="finalBest">0 m</span></div>
+        <p class="tap">TAP TO GO AGAIN!</p>
+      </div>
+    </section>
+    <div class="credit">Efoil Fuerte · La Pared, Fuerteventura</div>
+    <div class="sr-only" id="status" aria-live="polite"></div>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const $ = id => document.getElementById(id);
+    const canvas = $('canvas'), ctx = canvas.getContext('2d');
+    const gameEl = $('game'), startPanel = $('startPanel'), overPanel = $('overPanel');
+    const metresEl = $('metres'), batteryFill = $('batteryFill'), statusEl = $('status');
+    const C = {ink:'#17151b',sky:'#41c7e8',teal:'#10aeb2',deep:'#087a91',sand:'#f5c96a',sun:'#ffd52e',coral:'#ff5d50',cream:'#fff9df'};
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let W=0,H=0,DPR=1,last=0,elapsed=0,held=false,state='start',overAt=0,shake=0;
+    let rider,things=[],particles=[],distance=0,battery=100,spawnClock=0,batteryClock=0,scenery=0;
+    function loadBest(){try{return Number(localStorage.getItem('efoil-fuerte-best'))||0}catch{return 0}}
+    function saveBest(value){try{localStorage.setItem('efoil-fuerte-best',String(value))}catch{/* Storage can be blocked for local files. */}}
+    let best = loadBest();
+
+    function resize(){
+      W=innerWidth; H=innerHeight; DPR=Math.min(devicePixelRatio||1,2);
+      canvas.width=Math.round(W*DPR); canvas.height=Math.round(H*DPR);
+      canvas.style.width=W+'px'; canvas.style.height=H+'px';
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+      if(rider) rider.y=Math.min(rider.y,H*.72);
+    }
+    const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+    const rnd=(a,b)=>a+Math.random()*(b-a);
+    const waterY=()=>H*.66;
+    function roundRect(x,y,w,h,r,fill,stroke=C.ink,lw=4){
+      ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.fillStyle=fill; ctx.fill();
+      if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.stroke()}
+    }
+    function line(points,color=C.ink,width=4){
+      ctx.beginPath(); ctx.moveTo(points[0][0],points[0][1]);
+      points.slice(1).forEach(p=>ctx.lineTo(p[0],p[1])); ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke();
+    }
+
+    function reset(){
+      rider={x:W*.24,y:H*.49,vy:0,angle:0}; things=[];particles=[];distance=0;battery=100;
+      spawnClock=.65;batteryClock=3;elapsed=0;shake=0;scenery=0; updateHud();
+    }
+    function start(){
+      reset(); state='play'; startPanel.hidden=true; overPanel.hidden=true; last=performance.now();
+      statusEl.textContent='Ride started. Hold to fly, release to dip.';
+    }
+    function end(reason){
+      if(state!=='play')return; state='over';held=false;overAt=performance.now();shake=reduced?0:18;
+      const score=Math.floor(distance); best=Math.max(best,score); saveBest(best);
+      $('finalScore').textContent=score+' m'; $('finalBest').textContent=best+' m';
+      $('overWord').textContent=reason==='power'?'ZAP…':'SPLASH!'; $('overTag').textContent=reason==='power'?'Battery flat!':'Wipeout!';
+      overPanel.hidden=false; $('startBest').textContent='Best: '+best+' m'; statusEl.textContent='Game over. Score '+score+' metres. Best '+best+' metres.';
+      burst(rider.x,rider.y,reason==='power'?C.sun:C.cream,24);
+    }
+    function updateHud(){
+      metresEl.textContent=Math.floor(distance); batteryFill.style.width=clamp(battery,0,100)+'%';
+      batteryFill.style.background=battery<24?C.coral:C.sun;
+    }
+    function spawn(){
+      const buoy=Math.random()<.56;
+      things.push(buoy?{type:'buoy',x:W+50,y:waterY()+6,r:22,hit:false}:{type:'gull',x:W+55,y:rnd(H*.22,H*.48),r:19,phase:rnd(0,6),hit:false});
+      spawnClock=rnd(1.25,2.05)*clamp(1-distance/900,.68,1);
+    }
+    function spawnBattery(){
+      things.push({type:'battery',x:W+60,y:rnd(H*.25,H*.59),r:20,phase:rnd(0,6),hit:false}); batteryClock=rnd(4.6,7.2);
+    }
+    function burst(x,y,color,count=12){
+      for(let i=0;i<count;i++){const a=rnd(0,Math.PI*2),s=rnd(50,180);particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-30,life:rnd(.35,.75),color})}
+    }
+    function hits(a,b){const dx=a.x-b.x,dy=a.y-b.y;return dx*dx+dy*dy<(a.r+b.r)*(a.r+b.r)}
+
+    function update(dt){
+      if(state!=='play')return;
+      elapsed+=dt; const speed=Math.min(360,190+distance*.14); scenery=(scenery+speed*dt)%(W||1);
+      rider.vy+=(held?-650:440)*dt; rider.vy*=Math.pow(.96,dt*60); rider.y+=rider.vy*dt;
+      const ceiling=H*.16, floor=waterY()+20;
+      if(rider.y<ceiling){rider.y=ceiling;rider.vy=Math.max(0,rider.vy*.2)}
+      if(rider.y>floor){rider.y=floor;rider.vy=Math.min(0,rider.vy*.18); if(Math.random()<dt*16)burst(rider.x-20,waterY(),C.cream,2)}
+      rider.angle=clamp(rider.vy/560,-.22,.24);
+      distance+=speed*dt*.055; battery-=dt*(5.1+(held?1.35:0)); spawnClock-=dt;batteryClock-=dt;
+      if(spawnClock<=0)spawn(); if(batteryClock<=0)spawnBattery();
+      for(const t of things){
+        t.x-=speed*dt; if(t.phase!==undefined)t.y+=Math.sin(elapsed*4+t.phase)*10*dt;
+        if(!t.hit&&hits({x:rider.x,y:rider.y,r:19},t)){
+          t.hit=true;
+          if(t.type==='battery'){battery=Math.min(100,battery+31);burst(t.x,t.y,C.sun,15);statusEl.textContent='Battery collected!';}
+          else {end('crash');break}
+        }
+      }
+      things=things.filter(t=>t.x>-80&&!t.hit);
+      for(const p of particles){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=260*dt;p.life-=dt}
+      particles=particles.filter(p=>p.life>0); if(battery<=0)end('power'); updateHud();
+    }
+
+    function background(){
+      ctx.fillStyle=C.sky;ctx.fillRect(0,0,W,H);
+      // Sunburst and halftone sky.
+      ctx.save();ctx.translate(W*.83,H*.16);ctx.fillStyle=C.sun;ctx.strokeStyle=C.ink;ctx.lineWidth=5;
+      for(let i=0;i<12;i++){ctx.rotate(Math.PI/6);ctx.fillRect(31,-3,Math.max(W,H)*.22,6)}
+      ctx.beginPath();ctx.arc(0,0,36,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.restore();
+      ctx.fillStyle='rgba(23,21,27,.12)';
+      for(let y=26;y<waterY();y+=17)for(let x=10;x<W;x+=17)if((x+y)%51<20){ctx.beginPath();ctx.arc(x,y,1.6,0,7);ctx.fill()}
+      // Distant volcanic coast.
+      ctx.beginPath();ctx.moveTo(0,waterY()+4);ctx.lineTo(0,H*.56);ctx.lineTo(W*.18,H*.49);ctx.lineTo(W*.34,H*.57);ctx.lineTo(W*.55,H*.52);ctx.lineTo(W*.73,H*.59);ctx.lineTo(W,H*.54);ctx.lineTo(W,waterY()+4);ctx.closePath();ctx.fillStyle=C.sand;ctx.fill();ctx.strokeStyle=C.ink;ctx.lineWidth=5;ctx.stroke();
+      ctx.beginPath();ctx.moveTo(W*.02,H*.56);ctx.lineTo(W*.2,H*.49);ctx.lineTo(W*.31,H*.55);ctx.lineTo(W*.15,H*.545);ctx.closePath();ctx.fillStyle='#a64b43';ctx.fill();ctx.stroke();
+      ctx.fillStyle=C.teal;ctx.fillRect(0,waterY(),W,H-waterY());
+      ctx.strokeStyle=C.ink;ctx.lineWidth=5;ctx.beginPath();
+      for(let x=-40-(scenery*.35)%64;x<W+50;x+=64){ctx.moveTo(x,waterY()+4);ctx.quadraticCurveTo(x+16,waterY()-9,x+32,waterY()+4);ctx.quadraticCurveTo(x+48,waterY()+17,x+64,waterY()+4)}ctx.stroke();
+      ctx.strokeStyle='rgba(255,255,255,.72)';ctx.lineWidth=3;
+      for(let row=0;row<5;row++){ctx.beginPath();for(let x=-80-(scenery*(.65+row*.09))%90;x<W+90;x+=90){const y=waterY()+32+row*36;ctx.moveTo(x,y);ctx.quadraticCurveTo(x+22,y-8,x+44,y)}ctx.stroke()}
+    }
+    function drawBattery(t){
+      ctx.save();ctx.translate(t.x,t.y);ctx.rotate(-.12);roundRect(-18,-24,32,48,5,C.sun,C.ink,4);ctx.fillStyle=C.ink;ctx.fillRect(-7,-30,11,7);ctx.beginPath();ctx.moveTo(4,-14);ctx.lineTo(-7,2);ctx.lineTo(1,2);ctx.lineTo(-5,16);ctx.lineTo(10,-4);ctx.lineTo(2,-4);ctx.closePath();ctx.fill();ctx.restore();
+    }
+    function drawBuoy(t){
+      ctx.save();ctx.translate(t.x,t.y);ctx.fillStyle=C.coral;ctx.strokeStyle=C.ink;ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(-18,15);ctx.quadraticCurveTo(-14,-28,0,-34);ctx.quadraticCurveTo(14,-28,18,15);ctx.closePath();ctx.fill();ctx.stroke();ctx.fillStyle=C.cream;ctx.fillRect(-13,-10,26,12);ctx.strokeRect(-13,-10,26,12);ctx.beginPath();ctx.arc(0,-38,6,0,7);ctx.stroke();ctx.restore();
+    }
+    function drawGull(t){
+      ctx.save();ctx.translate(t.x,t.y);ctx.strokeStyle=C.ink;ctx.fillStyle=C.cream;ctx.lineWidth=5;ctx.lineCap='round';
+      ctx.beginPath();ctx.moveTo(-25,3);ctx.quadraticCurveTo(-13,-15,0,0);ctx.quadraticCurveTo(13,-15,26,2);ctx.quadraticCurveTo(12,-5,0,9);ctx.quadraticCurveTo(-12,-5,-25,3);ctx.fill();ctx.stroke();ctx.fillStyle=C.coral;ctx.beginPath();ctx.moveTo(1,4);ctx.lineTo(13,8);ctx.lineTo(2,11);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
+    }
+    function drawRider(){
+      const r=rider;ctx.save();ctx.translate(r.x,r.y);ctx.rotate(r.angle);ctx.strokeStyle=C.ink;ctx.lineCap='round';ctx.lineJoin='round';
+      // Foil, mast and wing.
+      line([[0,10],[0,53]],C.ink,5);line([[-24,55],[25,55]],C.ink,6);
+      ctx.beginPath();ctx.ellipse(0,9,42,9,-.05,0,7);ctx.fillStyle=C.coral;ctx.fill();ctx.lineWidth=5;ctx.stroke();
+      // Rider with remote.
+      line([[-8,1],[-3,-23],[13,-35]],C.ink,8);line([[-3,-18],[-19,-6]],C.ink,7);line([[-3,-17],[17,-13]],C.ink,7);
+      ctx.fillStyle=C.sun;ctx.beginPath();ctx.arc(1,-38,11,0,7);ctx.fill();ctx.lineWidth=5;ctx.stroke();
+      ctx.fillStyle=C.coral;ctx.beginPath();ctx.arc(-2,-41,10,Math.PI,Math.PI*2);ctx.fill();ctx.stroke();
+      roundRect(15,-18,8,13,3,C.deep,C.ink,3);
+      if(held){ctx.fillStyle=C.sun;ctx.font='20px Bangers, Impact';ctx.strokeStyle=C.ink;ctx.lineWidth=4;ctx.strokeText('ZAP!',25,-27);ctx.fillText('ZAP!',25,-27)}
+      ctx.restore();
+    }
+    function drawParticles(){for(const p of particles){ctx.globalAlpha=clamp(p.life*2,0,1);ctx.fillStyle=p.color;ctx.strokeStyle=C.ink;ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill();ctx.stroke()}ctx.globalAlpha=1}
+    function draw(){
+      ctx.save();if(shake>0){ctx.translate(rnd(-shake,shake),rnd(-shake,shake));shake*=.86}
+      background();
+      for(const t of things){if(t.type==='battery')drawBattery(t);else if(t.type==='buoy')drawBuoy(t);else drawGull(t)}
+      if(rider)drawRider();drawParticles();ctx.restore();
+    }
+    function loop(now){
+      const dt=Math.min(.033,Math.max(0,(now-last)/1000||0));last=now;
+      if(!document.hidden){if(new URLSearchParams(location.search).has('autostart')&&state==='play')held=(Math.sin(now/430)>-.2);update(dt);draw()}
+      requestAnimationFrame(loop);
+    }
+    function press(e){
+      if(e?.type==='keydown'&&e.code!=='Space'&&e.code!=='Enter')return;
+      e?.preventDefault();gameEl.focus({preventScroll:true});
+      if(state==='start')start();else if(state==='over'){if(performance.now()-overAt>650)start()}else held=true;
+    }
+    function release(e){if(e?.type==='keyup'&&e.code!=='Space'&&e.code!=='Enter')return;e?.preventDefault();held=false}
+    gameEl.addEventListener('pointerdown',press);addEventListener('pointerup',release);addEventListener('pointercancel',release);
+    addEventListener('keydown',press);addEventListener('keyup',release);addEventListener('blur',release);
+    addEventListener('contextmenu',e=>e.preventDefault());addEventListener('resize',resize,{passive:true});
+    document.addEventListener('visibilitychange',()=>{held=false;last=performance.now()});
+    resize();reset();$('startBest').textContent='Best: '+best+' m';draw();requestAnimationFrame(loop);
+    if(new URLSearchParams(location.search).has('autostart'))setTimeout(start,120);
+    window.__efoilDebug=()=>({state,distance,battery,held,objects:things.length});
+  })();
+  </script>
+</body>
+</html>
