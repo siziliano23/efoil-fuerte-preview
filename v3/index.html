@@ -245,7 +245,7 @@ function layout(){
   const dpr=Math.min(2,window.devicePixelRatio||1);cv.width=Math.round(CSSW*dpr);cv.height=Math.round(CSSH*dpr);ctx.setTransform(CSSW*dpr/W,0,0,CSSW*dpr/W,0,0);
 }
 const cam={x:0,h:C.CAM_H,roll:0,pitch:0,fk:1,shake:0};
-function project(x,z,y){const zr=z-(S.rz-D);if(zr<0.4)return null;const s=F*cam.fk/zr;return{sx:CX+(x-cam.x)*s,sy:HZ+cam.pitch+(cam.h-(y||0))*s,s,zr}}
+function project(x,z,y){const zr=z-(S.rz-D);if(zr<0.4)return null;const s=F*cam.fk/zr;return{sx:CX+(x-cam.x)*s,sy:HZ+cam.pitch+(sw_ch()-(y||0)-sw_h(x,z))*s,s,zr}}
 
 // ===================== STATE =====================
 let S=null,paused=false,running=false;
@@ -466,7 +466,7 @@ function cloud(x,y,s){const r=M*0.04*s,parts=[[x,y,r],[x+r*1.1,y-r*0.5,r*1.25],[
   ctx.fillStyle=INK;for(const [cx,cy,cr] of parts){ctx.beginPath();ctx.arc(cx,cy,cr+1.5,0,7);ctx.fill()}ctx.fillRect(x-r-1.5,y,r*4.4+3,r*0.9+1.5);
   ctx.fillStyle='#FFFFFF';for(const [cx,cy,cr] of parts){ctx.beginPath();ctx.arc(cx,cy,cr,0,7);ctx.fill()}ctx.fillRect(x-r,y,r*4.4,r*0.9)}
 const sunX=()=>CX+W*0.22;
-const seaY=(zr,hz)=>hz+cam.h*F*cam.fk/zr;
+const seaY=(zr,hz)=>hz+sw_ch()*F*cam.fk/zr;
 function drawSky(hz){
   const pad=W,par=-cam.x*0.6;
   ctx.fillStyle=SKY[0];ctx.fillRect(-pad,-H,W+2*pad,H+hz*0.32);ctx.fillStyle=SKY[1];ctx.fillRect(-pad,hz*0.32,W+2*pad,hz*0.32);
@@ -483,26 +483,139 @@ function drawSky(hz){
   for(let k=-1;k<=1;k++)for(let i=0;i<7;i++){const x=(0.29+i*0.012)*per-sh+k*per;if(x<-10||x>W+10)continue;if(hill(HILLS_NEAR,x+sh,per,M)<6)continue;
     const hy=hz-2-(i%3)*2.5;ctx.fillStyle='#FFFFFF';ctx.fillRect(x,hy-4,4.5,4);ctx.fillStyle=CORAL;ctx.fillRect(x-0.5,hy-5.2,5.5,1.4)}
 }
+// ---- FINAL water: W3 moving heightfield (strips uniform in 1/zr, shared vertices, cel-shaded crests) + jury grafts ----
+// h(x,z,t) = A1·E·sin(K1 (z + 0.10x + 3.4t) + phi)      primary swell, L = 9.5 m, rolls toward the camera at 3.4 m/s
+//            phi = 0.38 sin(0.6x + 0.22t) + 0.7 sin(0.12z - 0.1t)   slow phase wander: crests bend (x) and their spacing breathes 8.3..10.7 m (z),
+//                                                          so the bob under the rider is neither periodic nor constant
+//            E   = 1 + 0.20 sin(0.21(z + 1.7t) + 0.07x) + 0.12 sin(0.083z - 0.05x + 0.2t)   wave groups (0.68..1.32)
+//          + 0.07 sin(K2 (0.7z - 0.6x + 2.2t))            oblique secondary train, L = 5.5 m
+//          + 0.04 sin(K3 (x + 0.35z) - 2.5t)              ripple across x, L = 1.7 m
+// total amplitude 0.17·1.32 + 0.07 + 0.04 = 0.334 m (hard cap 0.35 m).
+// Camera follows 50 % of the swell under the rider (sw_ch): rider/board screen bob halves, near water still heaves.
+function sw_P(){if(sw_P.v)return sw_P.v;
+  const L1=9.5,K1=6.2832/L1,K2=6.2832/5.5,K3=6.2832/1.7,NL=6,NDQ=6,ND=4*NDQ,rgb=c=>[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)];
+  const mix=(b,t,a)=>'rgb('+Math.round(b[0]+(t[0]-b[0])*a)+','+Math.round(b[1]+(t[1]-b[1])*a)+','+Math.round(b[2]+(t[2]-b[2])*a)+')';
+  const deep=rgb(DEEP),foam=rgb(FOAM),sea=SEA.map(rgb);
+  // 2-D shading LUT: depth level d (0 = far SEA[0] ... ND = near SEA[4], blended in between so the depth tones are continuous)
+  // x shade level -NL..NL (negative = toward DEEP on the front face, positive = toward FOAM on the lit back face)
+  const LUT=[];for(let d=0;d<=ND;d++){const u=d/NDQ,i=Math.min(3,Math.floor(u)),f=u-i,b=[0,1,2].map(k=>sea[i][k]+(sea[i+1][k]-sea[i][k])*f),a=[];
+    for(let l=-NL;l<=NL;l++){const k=l/NL;a.push(k>=0?mix(b,foam,0.26*k):mix(b,deep,0.30*-k))}LUT.push(a)}
+  const A1=0.17,EMAX=1.32;
+  return sw_P.v={L1,A1,K1,OX:0.10,C1:3.4,PM:0.38,PX:0.6,PT:0.22,PZ:0.7,PZK:0.12,PZT:-0.1,E1:0.20,EZ:0.21,EX:0.07,ET:0.36,E2:0.12,FZ:0.083,FX:-0.05,FT:0.2,
+    A2:0.07,K2,BZ:0.7,BX:-0.6,C2:2.2,A3:0.04,K3,RZ:0.35,W3:2.5,AMP:A1*EMAX+0.11,SMAX:A1*EMAX*K1+0.07*K2*0.7,ZFADE:40,NL,ND,NDQ,LUT}}
+// slow amplitude envelope (wave groups) and phase wander of the primary swell
+function sw_env(x,z,t){const P=sw_P();return 1+P.E1*Math.sin(P.EZ*z+P.EX*x+P.ET*t)+P.E2*Math.sin(P.FZ*z+P.FX*x+P.FT*t)}
+function sw_phi(x,z,t){const P=sw_P();return P.PM*Math.sin(P.PX*x+P.PT*t)+P.PZ*Math.sin(P.PZK*z+P.PZT*t)}
+function sw_h(x,z){const P=sw_P(),t=S.t;
+  return P.A1*sw_env(x,z,t)*Math.sin((z+P.OX*x+P.C1*t)*P.K1+sw_phi(x,z,t))+P.A2*Math.sin((P.BZ*z+P.BX*x+P.C2*t)*P.K2)+P.A3*Math.sin((x+P.RZ*z)*P.K3-P.W3*t)}
+// height and slope along z (dh/dz) written into hb[i], db[i]  (envelope/phase derivatives are small and ignored)
+function sw_hd(x,z,hb,db,i){const P=sw_P(),t=S.t,E=P.A1*sw_env(x,z,t),p1=(z+P.OX*x+P.C1*t)*P.K1+sw_phi(x,z,t),p2=(P.BZ*z+P.BX*x+P.C2*t)*P.K2,p3=(x+P.RZ*z)*P.K3-P.W3*t;
+  hb[i]=E*Math.sin(p1)+P.A2*Math.sin(p2)+P.A3*Math.sin(p3);db[i]=E*P.K1*Math.cos(p1)+P.A2*P.K2*P.BZ*Math.cos(p2)}
+// camera height incl. 50 % follow of the swell under the rider (cached per frame)
+function sw_ch(){const c=sw_ch.c||(sw_ch.c={t:-1,x:0,z:0,v:0});if(c.t!==S.t||c.x!==S.rx||c.z!==S.rz){c.t=S.t;c.x=S.rx;c.z=S.rz;c.v=0.5*sw_h(S.rx,S.rz)}return cam.h+c.v}
+function sw_buf(i,n){const b=sw_buf.b||(sw_buf.b=[]);if(!b[i]||b[i].length<n)b[i]=new Float64Array(n);return b[i]}
+function sw_pad(){return Math.round(0.1*Math.max(W,H))+24}
+function sw_step(){return Math.max(14,W/16)}
+// continuous depth level 0..4 (SEA[0] far -> SEA[4] near), piecewise linear in ln(zr): pure tones at zr >= 45, 28.5, 12, 5.3, <= 3.5
+function sw_depth(zr){const l=Math.log(zr);return l>=3.81?0:l>=3.35?(3.81-l)/0.46:l>=2.48?1+(3.35-l)/0.87:l>=1.67?2+(2.48-l)/0.81:l>=1.25?3+(1.67-l)/0.42:4}
+// screen-space curve of the bent world line z = A + dz - OX*x - phi(x,z)/K1 (a primary crest shifted by dz metres), one y per column; returns min zr hit.
+// The line is implicit in z; three fixed-point steps converge (|d phi/dz|/K1 = 0.13).
+function sw_edge(A,dz,hz,yb,x0,step,nx){const P=sw_P(),fk=F*cam.fk,cz=S.rz-D,camx=cam.x,ch=sw_ch(),t=S.t,zc=A+dz-cz-P.OX*camx,ik=1/P.K1;let zmin=1e9;
+  for(let j=0;j<nx;j++){const sx=x0+j*step,q=(sx-CX)/fk,den=1+P.OX*q;let zr=zc/den;
+    if(zr<0.5){yb[j]=H*2;continue}
+    let xw;for(let k=0;k<3;k++){xw=camx+q*zr;zr=(zc-ik*sw_phi(xw,cz+zr,t))/den}
+    if(zr<0.5){yb[j]=H*2;continue}
+    const s=fk/zr;xw=camx+q*zr;if(zr<zmin)zmin=zr;yb[j]=hz+(ch-sw_h(xw,cz+zr))*s}
+  return zmin}
+// filled band between two shifted crest curves (cel-shaded wave face)
+function sw_face(A,dzTop,dzBot,hz,x0,step,nx,fill){const yt=sw_buf(6,nx),yb=sw_buf(7,nx);const zt=sw_edge(A,dzTop,hz,yt,x0,step,nx);sw_edge(A,dzBot,hz,yb,x0,step,nx);if(zt>60)return;
+  ctx.beginPath();ctx.moveTo(x0,yt[0]);for(let j=1;j<nx;j++)ctx.lineTo(x0+j*step,yt[j]);for(let j=nx-1;j>=0;j--)ctx.lineTo(x0+j*step,yb[j]);ctx.closePath();ctx.fillStyle=fill;ctx.fill()}
+// primary crest indices n whose crest z (at the screen centre) lies within zr in [zlo, zhi]
+function sw_crests(zlo,zhi){const P=sw_P(),cz=S.rz-D,t=S.t,base=cz+P.OX*cam.x,ik=1/P.K1,out=[];
+  const n0=Math.ceil(((base+zlo+P.C1*t)*P.K1-1.5708-P.PM-P.PZ)/6.2832),n1=Math.floor(((base+zhi+P.C1*t)*P.K1-1.5708+P.PM+P.PZ)/6.2832);
+  for(let n=n0;n<=n1;n++){const A=(1.5708+6.2832*n)/P.K1-P.C1*t;let zc=A-base;for(let k=0;k<3;k++)zc=A-base-ik*sw_phi(cam.x,cz+zc,t);if(zc>=zlo-1&&zc<=zhi+1)out.push({n,A,zc})}return out}
 function drawSea(hz){
-  const pad=W;ctx.fillStyle=SEA[0];ctx.fillRect(-pad,hz,W+2*pad,H*2);
-  const bands=[[45,SEA[1]],[18,SEA[2]],[8,SEA[3]],[3.5,SEA[4]]];
-  for(const [z,col] of bands){const y0=seaY(z,hz),amp=clamp(0.12*F/z,0.5,6),wl=W*0.26,ph=S.t*1.2+z;
-    ctx.beginPath();ctx.moveTo(-pad,y0);for(let x=-pad;x<=W+pad;x+=8)ctx.lineTo(x,y0+Math.sin(x/wl*6.283+ph)*amp+Math.sin(x/(wl*0.61)*6.283-ph*1.3)*amp*0.35);
-    ctx.lineTo(W+pad,H*2);ctx.lineTo(-pad,H*2);ctx.closePath();ctx.fillStyle=col;ctx.fill()}
+  const P=sw_P(),pad=sw_pad(),fk=F*cam.fk,cz=S.rz-D,camx=cam.x,ch=sw_ch();
+  ctx.fillStyle=SEA[0];ctx.fillRect(-pad,hz,W+2*pad,H*2);
+  // far-water stipple (as base)
   const yA=hz+3,yB=Math.min(seaY(45,hz),hz+60);ctx.fillStyle='rgba(14,58,66,.28)';
   for(let y=yA;y<yB;y+=5){const off=((y/5)|0)%2*3;for(let x=-80+off;x<W+80;x+=6)ctx.fillRect(x,y,1.5,1.5)}
+  // 1) heightfield strips: rows uniform in 1/zr (~11 px apart on the flat plane), painted far -> near, shared vertices -> no tearing.
+  //    Depth tone is continuous (blended LUT), so no stepped bands; soft slope/height shading along x gives the ripple texture (fades with distance).
+  const zFar=60,zNear=Math.max(0.6,ch*fk/(H+70-hz)),vF=1/zFar,vN=1/zNear;
+  const n=clamp(Math.round(ch*fk*(vN-vF)/11),16,64);
+  const step=sw_step(),x0=-pad,nx=Math.ceil((W+2*pad)/step)+2,x1=x0+(nx-1)*step,inv=1/(nx-1);
+  let pY=sw_buf(0,nx),cY=sw_buf(1,nx),pH=sw_buf(2,nx),cH=sw_buf(3,nx),pD=sw_buf(4,nx),cD=sw_buf(5,nx);
+  let pz=zFar;
+  for(let i=0;i<=n;i++){
+    const v=vF+(vN-vF)*i/n,zr=1/v,s=fk*v,zw=cz+zr;
+    for(let j=0;j<nx;j++){const xw=camx+(x0+j*step-CX)/s;sw_hd(xw,zw,cH,cD,j);cY[j]=hz+(ch-cH[j])*s}
+    if(i>0){
+      const zm=0.5*(zr+pz),df=Math.pow(clamp(1-zm/P.ZFADE,0,1),1.2),lut=P.LUT[Math.round(sw_depth(zm)*P.NDQ)];
+      ctx.beginPath();ctx.moveTo(x0,pY[0]);for(let j=1;j<nx;j++)ctx.lineTo(x0+j*step,pY[j]);
+      for(let j=nx-1;j>=0;j--)ctx.lineTo(x0+j*step,cY[j]+1.2);ctx.closePath();
+      if(df<0.05)ctx.fillStyle=lut[P.NL];
+      else{const g=ctx.createLinearGradient(x0,0,x1,0);
+        for(let j=0;j<nx;j++){const L=(-0.45*(pD[j]+cD[j])/P.SMAX+0.15*(pH[j]+cH[j])/P.AMP)*df;
+          g.addColorStop(j*inv,lut[P.NL+Math.round(clamp(L,-1,1)*P.NL)])}
+        ctx.fillStyle=g}
+      ctx.fill()}
+    let tb=pY;pY=cY;cY=tb;tb=pH;pH=cH;cH=tb;tb=pD;pD=cD;cD=tb;pz=zr}
+  // nearest strip down to the bottom of the (rolled) viewport
+  ctx.beginPath();ctx.moveTo(x0,pY[0]);for(let j=1;j<nx;j++)ctx.lineTo(x0+j*step,pY[j]);ctx.lineTo(x1,H*2);ctx.lineTo(x0,H*2);ctx.closePath();ctx.fillStyle=SEA[4];ctx.fill();
+  // 2) cel-shaded primary wave faces, one set per (bent) crest, sliding toward the camera with the swell:
+  //    dark front face (crest -> trough, toward the camera) and a lit back-face band just beyond the crest; eased off in the last 2 m
+  const L1=P.L1;
+  for(const c of sw_crests(-0.5*L1,44)){const a=clamp(1-c.zc/38,0,1)*clamp((c.zc+0.3*L1)/(0.6*L1),0,1)*(0.55+0.45*clamp((c.zc-0.5)/2.5,0,1));if(a<=0.02)continue;
+    sw_face(c.A,-0.03*L1,-0.42*L1,hz,x0,step,nx,'rgba(14,58,66,'+(0.14*a).toFixed(3)+')');
+    sw_face(c.A,-0.07*L1,-0.30*L1,hz,x0,step,nx,'rgba(14,58,66,'+(0.16*a).toFixed(3)+')');
+    sw_face(c.A,0.22*L1,0.02*L1,hz,x0,step,nx,'rgba(244,248,245,'+(0.20*a).toFixed(3)+')')}
 }
 function drawWaves(){
-  ctx.lineCap='round';
-  for(const w of S.waves){const p=project(w.x,w.z,0);if(!p)continue;const hw=w.w*p.s/2;if(p.sx+hw<-60||p.sx-hw>W+60||p.sy>H+40)continue;
-    const fs=clamp(cam.h/p.zr*1.5,0.15,1),amp=hw*0.15*fs;ctx.lineWidth=clamp(0.06*p.s,0.7,2.5);ctx.globalAlpha=clamp(1-p.zr/120,0.2,1);
+  const P=sw_P(),hz=HZ+cam.pitch,pad=sw_pad(),step=sw_step()*0.5,fk=F*cam.fk,cz=S.rz-D,camx=cam.x,ch=sw_ch(),t=S.t;
+  ctx.lineCap='round';ctx.lineJoin='round';
+  // broken whitecaps: foam only where the local crest height exceeds a threshold that wanders along x (and per crest),
+  // gated by crest curvature and, under 6 m, by a finer break pattern; tapered lens segments with an ink shade underneath,
+  // full strength to 14 m, gone by 24 m, eased in over the nearest 3 m; nearest cap 4.5 px
+  const nb=Math.ceil((W+2*pad)/step)+2,fy=sw_buf(8,nb),fw=sw_buf(9,nb),ik=1/P.K1;
+  const K2z=P.K2*P.K2*P.BZ*P.BZ*P.A2,K1c=P.K1*P.K1*P.A1;
+  for(const c of sw_crests(0.9,18)){const zc=c.zc,A=c.A,n=c.n,zc0=A-cz-P.OX*camx;
+    const a=Math.pow(clamp((18-zc)/8,0,1),0.8)*clamp((zc-1)/2.2,0,1);if(a<=0.02)continue;
+    const lwc=clamp(0.13*fk/zc,1.4,4.5);let m=0;
+    for(let sx=-pad;sx<=W+pad;sx+=step,m++){const q=(sx-CX)/fk,den=1+P.OX*q;let zr=zc0/den;fw[m]=0;fy[m]=-1;
+      if(zr<0.55)continue;
+      let xw;for(let k=0;k<3;k++){xw=camx+q*zr;zr=(zc0-ik*sw_phi(xw,cz+zr,t))/den}xw=camx+q*zr;
+      if(zr<0.55||zr>20)continue;
+      const zw=cz+zr,s=fk/zr,E=sw_env(xw,zw,t),p2=(P.BZ*zw+P.BX*xw+P.C2*t)*P.K2,s2=Math.sin(p2);
+      const hc=P.A1*E+P.A2*s2+P.A3*Math.sin((xw+P.RZ*zw)*P.K3-P.W3*t);
+      fy[m]=hz+(ch-hc)*s;
+      const thr=0.175+0.05*Math.sin(0.41*xw+1.9*n)+0.04*Math.sin(1.3*xw-0.7*n+0.3*t)+0.03*Math.sin(2.9*xw+1.1*n)+(zr<4?0.025*(4-zr):0);
+      let f=clamp((hc-thr)/0.03,0,1)*clamp((K1c*E+K2z*s2-0.07)/0.05,0,1);
+      if(zr<6){const k=clamp((6-zr)/3,0,1);f*=1-k+k*clamp(0.55+1.5*Math.sin(5.5*xw+0.9*n),0,1)}
+      fw[m]=f}
+    // runs of fw>0 -> tapered lens polygons (shade pass, then foam pass)
+    for(let pass=0;pass<2;pass++){ctx.beginPath();const dy=pass?0:lwc*0.6;
+      for(let i=0;i<m;){if(fw[i]<=0){i++;continue}let j=i;while(j<m&&fw[j]>0)j++;
+        const i0=(i>0&&fy[i-1]>=0)?i-1:i,j1=(j<m&&fy[j]>=0)?j:j-1,len=j1-i0;
+        if(len<2){i=j;continue}
+        const hw=k=>0.5*lwc*(0.45+0.55*fw[k])*Math.pow(Math.sin(3.1416*(k-i0)/len),0.6);
+        ctx.moveTo(-pad+i0*step,fy[i0]+dy);
+        for(let k=i0+1;k<j1;k++)ctx.lineTo(-pad+k*step,fy[k]+dy-hw(k));
+        ctx.lineTo(-pad+j1*step,fy[j1]+dy);
+        for(let k=j1-1;k>i0;k--)ctx.lineTo(-pad+k*step,fy[k]+dy+hw(k));
+        ctx.closePath();i=j}
+      if(pass){ctx.globalAlpha=0.95*a;ctx.fillStyle=FOAM}else{ctx.globalAlpha=0.30*a;ctx.fillStyle='rgba(14,58,66,.9)'}
+      ctx.fill()}}
+  // small world-fixed comic wave strokes (as base, slightly quieter; project() puts them on the swell)
+  for(const w of S.waves){const p=project(w.x,w.z,0);if(!p||p.zr<6)continue;const hw=w.w*p.s/2;if(p.sx+hw<-60||p.sx-hw>W+60||p.sy>H+40)continue;
+    const fs=clamp(cam.h/p.zr*1.5,0.15,1),amp=hw*0.15*fs;ctx.lineWidth=clamp(0.05*p.s,0.7,2.2);ctx.globalAlpha=0.7*clamp(1-p.zr/120,0.2,1)*clamp((p.zr-6)/6,0,1);
     ctx.strokeStyle=w.dark?'rgba(14,58,66,.55)':'rgba(244,248,245,.8)';
     ctx.beginPath();ctx.moveTo(p.sx-hw,p.sy);ctx.quadraticCurveTo(p.sx-hw/2,p.sy-amp,p.sx,p.sy);ctx.quadraticCurveTo(p.sx+hw/2,p.sy+amp*0.6,p.sx+hw,p.sy);ctx.stroke()}
   ctx.globalAlpha=1;
 }
-function drawGlitter(hz){const gx=sunX();ctx.fillStyle='rgba(255,248,231,.9)';
-  for(const g of S.glit){const s=F*cam.fk/g.z,sy=hz+cam.h*s;if(sy>H+10)continue;const w=clamp(0.5*s,2,40),h=Math.max(1,0.05*s);
-    ctx.globalAlpha=(0.45+0.4*Math.sin(S.t*6+g.ph))*clamp(1-g.z/140,0.3,1);ctx.fillRect(gx+g.off*s-w/2,sy-h/2,w,h)}ctx.globalAlpha=1}
+function drawGlitter(hz){const gx=sunX(),fk=F*cam.fk,cz=S.rz-D,ch=sw_ch();ctx.fillStyle='rgba(255,248,231,.9)';
+  for(const g of S.glit){const s=fk/g.z,sx=gx+g.off*s,xw=cam.x+(sx-CX)/s,sy=hz+(ch-sw_h(xw,cz+g.z))*s;if(sy>H+10)continue;const w=clamp(0.5*s,2,40),h=Math.max(1,0.05*s);
+    ctx.globalAlpha=(0.45+0.4*Math.sin(S.t*6+g.ph))*clamp(1-g.z/140,0.3,1);ctx.fillRect(sx-w/2,sy-h/2,w,h)}ctx.globalAlpha=1}
 function drawHaze(hz){const y1=seaY(70,hz),y2=seaY(45,hz),y3=seaY(28,hz);ctx.fillStyle='rgba(221,238,245,.30)';ctx.fillRect(-W,hz-1,3*W,y1-hz+1);ctx.fillStyle='rgba(221,238,245,.16)';ctx.fillRect(-W,y1,3*W,y2-y1);ctx.fillStyle='rgba(221,238,245,.07)';ctx.fillRect(-W,y2,3*W,y3-y2)}
 function drawMarker(p){const r=Math.max(1,C.MARKER_R*p.s);if(p.sx<-r||p.sx>W+r||p.sy>H+r)return;
   if(p.s>12){ctx.fillStyle='rgba(244,248,245,.7)';ctx.beginPath();ctx.ellipse(p.sx,p.sy,r*1.6,r*1.6*clamp(cam.h/p.zr,0.1,0.8),0,0,7);ctx.fill()}
@@ -567,52 +680,152 @@ function drawDolphin(d){
   ctx.beginPath();ctx.moveTo(-1.0*s,0);ctx.lineTo(-1.3*s,-0.3*s);ctx.lineTo(-1.15*s,0);ctx.lineTo(-1.3*s,0.3*s);ctx.closePath();ctx.fillStyle=SUIT;ctx.fill();ctx.stroke();
   ctx.restore();
 }
+// ===== rider SX: rider-X's staggered surf stance ported onto the swell water, re-inked chunky =====
+// Board frame: x right, z nose, y up, origin = deck centre. 1.70 x 0.70 m plan, rounded nose, squarer tail (edge n-1).
+const RD_HULL=[[-.28,-.85],[-.33,-.80],[-.35,-.62],[-.35,.22],[-.335,.42],[-.30,.57],[-.24,.69],[-.155,.78],[-.06,.845],[.06,.845],[.155,.78],[.24,.69],[.30,.57],[.335,.42],[.35,.22],[.35,-.62],[.33,-.80],[.28,-.85]];
+function rd_area(pts){let a=0;for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length];a+=p.sx*q.sy-q.sx*p.sy}return a}
+function rd_path(points,fill,lw=0,stroke=INK){
+  if(points.some(p=>!p))return;ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.sx,p.sy):ctx.moveTo(p.sx,p.sy));ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill()}if(lw){ctx.lineWidth=lw;ctx.strokeStyle=stroke;ctx.lineJoin='round';ctx.stroke()}
+}
+function rd_line(points,col,lw){if(points.some(p=>!p))return;ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.sx,p.sy):ctx.moveTo(p.sx,p.sy));ctx.strokeStyle=col;ctx.lineWidth=lw;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke()}
+function rd_soft(points,fill,lw,round=.22,stroke=INK){
+  if(points.some(p=>!p))return;ctx.beginPath();
+  for(let i=0;i<points.length;i++){const p=points[i],prev=points[(i+points.length-1)%points.length],next=points[(i+1)%points.length],a={x:lerp(p.sx,prev.sx,round),y:lerp(p.sy,prev.sy,round)},b={x:lerp(p.sx,next.sx,round),y:lerp(p.sy,next.sy,round)};
+    i?ctx.lineTo(a.x,a.y):ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(p.sx,p.sy,b.x,b.y)}
+  ctx.closePath();if(fill){ctx.fillStyle=fill;ctx.fill()}if(lw){ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.lineJoin='round';ctx.stroke()}
+}
+// Tapered, continuous limb silhouettes keep bent joints readable at phone scale (radii in metres per joint).
+function rd_limb(points,radii,fill,lw){
+  if(points.some(p=>!p))return;const L=[],R=[];
+  for(let i=0;i<points.length;i++){const p=points[i],a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)],len=Math.hypot(b.sx-a.sx,b.sy-a.sy)||1,nx=-(b.sy-a.sy)/len,ny=(b.sx-a.sx)/len,r=radii[i]*p.s;L.push({sx:p.sx+nx*r,sy:p.sy+ny*r});R.push({sx:p.sx-nx*r,sy:p.sy-ny*r})}
+  ctx.beginPath();ctx.moveTo(L[0].sx,L[0].sy);
+  for(let i=1;i<L.length-1;i++){const a=L[i],b=L[i+1];ctx.quadraticCurveTo(a.sx,a.sy,lerp(a.sx,b.sx,.25),lerp(a.sy,b.sy,.25))}ctx.lineTo(L[L.length-1].sx,L[L.length-1].sy);
+  const end=points[points.length-1],before=points[points.length-2],endLen=Math.hypot(end.sx-before.sx,end.sy-before.sy)||1,rEnd=radii[radii.length-1]*end.s*1.8;
+  ctx.quadraticCurveTo(end.sx+(end.sx-before.sx)/endLen*rEnd,end.sy+(end.sy-before.sy)/endLen*rEnd,R[R.length-1].sx,R[R.length-1].sy);
+  for(let i=R.length-2;i>0;i--){const a=R[i],b=R[i-1];ctx.quadraticCurveTo(a.sx,a.sy,lerp(a.sx,b.sx,.25),lerp(a.sy,b.sy,.25))}ctx.lineTo(R[0].sx,R[0].sy);
+  const start=points[0],after=points[1],startLen=Math.hypot(after.sx-start.sx,after.sy-start.sy)||1,rStart=radii[0]*start.s*1.6;
+  ctx.quadraticCurveTo(start.sx-(after.sx-start.sx)/startLen*rStart,start.sy-(after.sy-start.sy)/startLen*rStart,L[0].sx,L[0].sy);
+  ctx.closePath();ctx.fillStyle=fill;ctx.fill();if(lw){ctx.strokeStyle=INK;ctx.lineWidth=lw;ctx.lineJoin='round';ctx.stroke()}
+}
+function rd_dot(p,r,fill,lw){if(!p)return;ctx.beginPath();ctx.arc(p.sx,p.sy,r,0,7);ctx.fillStyle=fill;ctx.fill();if(lw){ctx.lineWidth=lw;ctx.strokeStyle=INK;ctx.stroke()}}
 function drawRider(){
-  const q=S.seq,wipe=q&&q.kind==='wipe',wk=wipe?clamp(q.t/0.5,0,1):0;
-  const yaw=S.yaw*1.6+(wipe?q.side*q.t*2.5:0),roll=S.lean*0.4,cy=Math.cos(yaw),sy=Math.sin(yaw);
-  const bx=S.rx+(wipe?-q.side*0.8*wk:0),bz=S.rz;
-  const P=(xl,zl,yo)=>project(bx+xl*cy+zl*sy,bz-xl*sy+zl*cy,S.h+xl*Math.sin(roll)+(yo||0));
-  const mb=project(bx,bz,S.h),mt=project(bx,bz,-0.12);if(!mb||!mt)return;
-  const s=mb.s;
-  {const g=project(bx,bz,0);if(g){const fs=clamp(cam.h/g.zr,0.1,0.8);ctx.fillStyle='rgba(14,58,66,'+(0.1+0.18*S.h/C.H_MAX)+')';ctx.beginPath();ctx.ellipse(g.sx,g.sy,0.75*s,0.75*s*fs,0,0,7);ctx.fill()}}
-  const wl=project(bx-0.5*cy,bz+0.5*sy,-0.22),wr=project(bx+0.5*cy,bz-0.5*sy,-0.22),wc=project(bx,bz,-0.26);
-  if(wl&&wr&&wc){ctx.globalAlpha=0.32;ctx.strokeStyle=SUIT;ctx.lineWidth=Math.max(2,0.1*s);ctx.lineCap='round';ctx.beginPath();ctx.moveTo(wl.sx,wl.sy);ctx.quadraticCurveTo(wc.sx,wc.sy+0.1*s,wr.sx,wr.sy);ctx.stroke();ctx.globalAlpha=1}
-  if(S.h>0.05){const fs=clamp(cam.h/mt.zr,0.1,0.8);ctx.fillStyle='rgba(244,248,245,.75)';ctx.beginPath();ctx.ellipse(mt.sx,mt.sy+0.02*s,0.28*s,0.28*s*fs,0,0,7);ctx.fill()}
-  ctx.strokeStyle=INK;ctx.lineWidth=Math.max(3,0.1*s);ctx.lineCap='round';ctx.beginPath();ctx.moveTo(mt.sx,mt.sy);ctx.lineTo(mb.sx,mb.sy);ctx.stroke();
-  ctx.strokeStyle=SUIT;ctx.lineWidth=Math.max(1.5,0.06*s);ctx.beginPath();ctx.moveTo(mt.sx,mt.sy);ctx.lineTo(mb.sx,mb.sy);ctx.stroke();
-  const c1=P(-0.36,-0.85),c2=P(-0.36,0.6),nt=P(0,1.02),c3=P(0.36,0.6),c4=P(0.36,-0.85),tt=P(0,-0.96);
-  if(c1&&c2&&nt&&c3&&c4&&tt){
-    const path=()=>{ctx.moveTo(c1.sx,c1.sy);ctx.lineTo(c2.sx,c2.sy);ctx.quadraticCurveTo(nt.sx,nt.sy,c3.sx,c3.sy);ctx.lineTo(c4.sx,c4.sy);ctx.quadraticCurveTo(tt.sx,tt.sy,c1.sx,c1.sy)};
-    ctx.beginPath();path();ctx.closePath();ctx.fillStyle=BOARD_SH;ctx.save();ctx.translate(0,Math.max(2,0.05*s));ctx.fill();ctx.restore();
-    ctx.beginPath();path();ctx.closePath();ctx.fillStyle=FOAM;ctx.fill();ctx.strokeStyle=INK;ctx.lineWidth=Math.max(1.5,0.03*s);ctx.lineJoin='round';ctx.stroke();
-    const d1=P(-0.27,-0.74),d2=P(-0.24,0.3),d3=P(0.24,0.3),d4=P(0.27,-0.74);
-    if(d1&&d2&&d3&&d4){ctx.beginPath();ctx.moveTo(d1.sx,d1.sy);ctx.lineTo(d2.sx,d2.sy);ctx.lineTo(d3.sx,d3.sy);ctx.lineTo(d4.sx,d4.sy);ctx.closePath();ctx.fillStyle='rgba(31,138,143,.35)';ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='rgba(21,43,48,.35)';ctx.stroke()}
-    const n1=P(-0.32,0.5),n2=P(-0.26,0.68),n3=P(0.26,0.68),n4=P(0.32,0.5);
-    if(n1&&n2&&n3&&n4){ctx.beginPath();ctx.moveTo(n1.sx,n1.sy);ctx.lineTo(n2.sx,n2.sy);ctx.lineTo(n3.sx,n3.sy);ctx.lineTo(n4.sx,n4.sy);ctx.closePath();ctx.fillStyle=CORAL;ctx.fill()}
-  }
-  // rider figure
-  const u=s,lean=S.lean;
-  ctx.save();ctx.translate(mb.sx,mb.sy);
-  if(wipe){ctx.globalAlpha=1-clamp((q.t-0.45)/0.25,0,1);ctx.translate(q.side*2.2*wk*u,-(1.6*wk-3.2*wk*wk)*u);ctx.rotate(q.side*wk*1.7)}
-  const crouch=q&&q.kind==='close'?clamp(q.t/0.3,0,1)*0.22:0;
-  ctx.rotate(lean*0.28);ctx.lineCap='round';ctx.lineJoin='round';
-  const leg=(fx,kx,hx,ky,hy)=>{ctx.beginPath();ctx.moveTo(fx,0);ctx.lineTo(kx,ky);ctx.lineTo(hx,hy);ctx.stroke()};
-  const hy=-(0.82-crouch)*u,ky=-(0.4-crouch*0.4)*u;
-  for(const [col,lw] of [[INK,0.17*u+2.5],[SUIT,0.17*u]]){ctx.strokeStyle=col;ctx.lineWidth=lw;
-    leg(-0.2*u,(-0.24+lean*0.06)*u,(-0.11+lean*0.12)*u,ky,hy);leg(0.2*u,(0.24+lean*0.06)*u,(0.11+lean*0.12)*u,ky,hy)}
-  ctx.fillStyle=SUIT;for(const fx of [-0.2,0.2]){ctx.beginPath();ctx.ellipse(fx*u,0,0.13*u,0.05*u,0,0,7);ctx.fill()}
-  ctx.save();ctx.translate(lean*0.12*u,hy);ctx.rotate(lean*0.14);
-  rrect(-0.25*u,-0.62*u,0.5*u,0.64*u,0.11*u);ctx.fillStyle=CORAL;ctx.fill();ctx.lineWidth=Math.max(1.2,0.025*u);ctx.strokeStyle=INK;ctx.stroke();
-  ctx.save();rrect(-0.25*u,-0.62*u,0.5*u,0.64*u,0.11*u);ctx.clip();ctx.fillStyle=SUN;ctx.fillRect(-0.3*u,-0.4*u,0.6*u,0.09*u);ctx.fillStyle='rgba(21,43,48,.12)';ctx.fillRect(0.08*u,-0.7*u,0.3*u,0.8*u);ctx.restore();
-  for(const [col,lw] of [[INK,0.12*u+2.2],[SKIN,0.12*u]]){ctx.strokeStyle=col;ctx.lineWidth=lw;
-    ctx.beginPath();ctx.moveTo(-0.24*u,-0.54*u);ctx.lineTo((-0.62-lean*0.12)*u,(-0.4+lean*0.12)*u);ctx.stroke();
-    ctx.beginPath();ctx.moveTo(0.24*u,-0.54*u);ctx.lineTo(0.38*u,-0.2*u);ctx.stroke()}
-  ctx.fillStyle=SUIT;rrect(0.32*u,-0.28*u,0.12*u,0.17*u,0.03*u);ctx.fill();ctx.lineWidth=1;ctx.strokeStyle=INK;ctx.stroke();
-  ctx.strokeStyle=INK;ctx.lineWidth=Math.max(2,0.1*u);ctx.beginPath();ctx.moveTo(0,-0.62*u);ctx.lineTo(0,-0.74*u);ctx.stroke();ctx.strokeStyle=SKIN;ctx.lineWidth=Math.max(1,0.07*u);ctx.stroke();
-  ctx.beginPath();ctx.arc(0,-0.88*u,0.17*u,0,7);ctx.fillStyle=SKIN;ctx.fill();ctx.lineWidth=Math.max(1.2,0.025*u);ctx.strokeStyle=INK;ctx.stroke();
-  ctx.beginPath();ctx.arc(0,-0.9*u,0.18*u,Math.PI*0.98,Math.PI*2.02);ctx.closePath();ctx.fillStyle=SUN;ctx.fill();ctx.stroke();
-  ctx.beginPath();ctx.moveTo(-0.18*u,-0.9*u);ctx.lineTo(0.18*u,-0.9*u);ctx.stroke();ctx.fillStyle=INK;ctx.beginPath();ctx.ellipse(0,-0.83*u,0.1*u,0.05*u,0,0,7);ctx.fill();
-  ctx.restore();ctx.restore();
+  const q=S.seq,wipe=q&&q.kind==='wipe',wk=wipe?clamp(q.t/.5,0,1):0,lean=clamp(S.lean,-1,1),carve=Math.abs(lean);
+  const yaw=S.yaw*1.1+(wipe?q.side*q.t*2.5:0),roll=lean*.24,cy=Math.cos(yaw),sy=Math.sin(yaw),cr=Math.cos(roll),sr=Math.sin(roll);
+  const bx=S.rx+(wipe?-q.side*.8*wk:0),bz=S.rz,water=sw_h(bx,bz);
+  // Board pitch follows the swell slope along the heading: fully while sitting on the water, ~30 % when flying on the foil.
+  const hN=sw_h(bx+.7*sy,bz+.7*cy),hT=sw_h(bx-.7*sy,bz-.7*cy),follow=1-.7*clamp(S.h/C.H_MAX,0,1);
+  const pitch=Math.atan((hN-hT)/1.4)*follow+0.052*clamp(S.h/.13,0,1),cp=Math.cos(pitch),sp=Math.sin(pitch);
+  // A rigid board and rider share one transform. Cancel the per-vertex swell that project() applies: only the root bobs.
+  const world=(x,z,y)=>{const xx=x*cr+y*sr,yy=-x*sr+y*cr,zz=z*cp-yy*sp;return{x:bx+xx*cy+zz*sy,z:bz-xx*sy+zz*cy,y:S.h+water+yy*cp+z*sp}};
+  const P=(x,z,y=0)=>{const p=world(x,z,y);return project(p.x,p.z,p.y-sw_h(p.x,p.z))};
+  const mb=P(0,0),surface=project(bx,bz,0);if(!mb||!surface)return;
+  const s=mb.s,lw=Math.max(2,.034*s),T=.13,rocker=z=>z>.3?.05*Math.pow((z-.3)/.55,2):0;
+  const hull=(kx,kz,y)=>RD_HULL.map(([x,z])=>P(x*kx,z*kz,y+rocker(z)));
+  const top=hull(1,1,0),bot=hull(.93,.985,-T),n=top.length;
+  if(top.some(p=>!p)||bot.some(p=>!p))return;
+  ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
+  // ---- shadow of the board on the water ----
+  const shadow=RD_HULL.map(([x,z])=>project(bx+x*cy+z*sy,bz-x*sy+z*cy,0));
+  rd_path(shadow,'rgba(14,58,66,'+(.12+.16*clamp(S.h/C.H_MAX,0,1)).toFixed(3)+')');
+  // ---- foil: 70 cm mast, fuselage, front wing, stabilizer and motor pod, fixed to the hull (translucent under water) ----
+  const foilY=-.82,wing=[[-.5,.03],[-.46,.15],[-.23,.27],[0,.3],[.23,.27],[.46,.15],[.5,.03],[.27,.10],[0,.14],[-.27,.10]];
+  ctx.globalAlpha=.22+.14*clamp(S.h/.8,0,1);
+  rd_path(wing.map(([x,z])=>P(x,z,foilY)),SUIT,lw*.8);
+  rd_path([[-.23,-.5],[-.19,-.4],[0,-.37],[.19,-.4],[.23,-.5],[0,-.46]].map(([x,z])=>P(x,z,foilY+.015)),SUIT,lw*.7);
+  rd_limb([P(0,-.55,foilY),P(0,.27,foilY)],[.032,.025],SUIT,lw*.7);
+  rd_limb([P(0,-.35,foilY+.025),P(0,-.08,foilY+.025)],[.075,.068],DEEP,lw*.7);
+  // Locate the mast/water intersection on the curved surface before splitting opacity.
+  let lo=foilY,hi=-T;
+  for(let i=0;i<9;i++){const m=(lo+hi)/2,p=world(0,0,m);if(p.y>sw_h(p.x,p.z))hi=m;else lo=m}
+  const wet=(lo+hi)/2,mw=.026;
+  rd_path([P(-mw,-.055,foilY),P(-mw,.055,wet),P(mw,.055,wet),P(mw,-.055,foilY)],SUIT,lw*.6);
+  ctx.globalAlpha=1;
+  if(wet<-T-.005){rd_path([P(-mw,-.055,wet),P(-mw,.055,-T),P(mw,.055,-T),P(mw,-.055,wet)],SUIT,lw*.8);rd_line([P(-.008,0,wet),P(-.008,0,-T)],LAGOON,Math.max(.7,.015*s))}
+  {const ring=[],w=world(0,0,wet);for(let i=0;i<=20;i++){const a=i/20*Math.PI*2;ring.push(project(w.x+.16*Math.cos(a),w.z+.13*Math.sin(a),.014))}rd_line(ring,'rgba(244,248,245,.7)',Math.max(.9,.024*s))}
+  // ---- board: bottom, visible rail faces (coral tail face, dark lower band), deck, pad, chevron, rail highlight ----
+  rd_path(bot,SAND,lw);
+  const signTop=Math.sign(rd_area(top)),vis=new Array(n);
+  for(let i=0;i<n;i++){const j=(i+1)%n;vis[i]=Math.sign(rd_area([top[j],top[i],bot[i],bot[j]]))===signTop}
+  const contact=S.h<.13?clamp(1-S.h/.13,0,1):0;
+  for(let i=0;i<n;i++){if(!vis[i])continue;const j=(i+1)%n,t0=top[i],t1=top[j],b0=bot[i],b1=bot[j];
+    rd_path([t0,t1,b1,b0],i===n-1?CORAL:BOARD_SH);
+    const m0={sx:lerp(t0.sx,b0.sx,.55),sy:lerp(t0.sy,b0.sy,.55)},m1={sx:lerp(t1.sx,b1.sx,.55),sy:lerp(t1.sy,b1.sy,.55)};
+    rd_path([m0,m1,b1,b0],i===n-1?'rgba(21,43,48,.22)':'rgba(21,43,48,.16)');
+    if(contact)rd_path([t0,t1,b1,b0],'rgba(31,138,143,'+((i===n-1?.18:.35)*contact).toFixed(3)+')')}
+  ctx.strokeStyle=INK;ctx.lineWidth=lw;ctx.beginPath();
+  for(let i=0;i<n;i++){if(!vis[i])continue;const j=(i+1)%n,k=(i-1+n)%n;ctx.moveTo(bot[i].sx,bot[i].sy);ctx.lineTo(bot[j].sx,bot[j].sy);
+    if(!vis[k]){ctx.moveTo(top[i].sx,top[i].sy);ctx.lineTo(bot[i].sx,bot[i].sy)}if(!vis[j]){ctx.moveTo(top[j].sx,top[j].sy);ctx.lineTo(bot[j].sx,bot[j].sy)}}
+  ctx.stroke();
+  rd_path(top,FOAM,lw);
+  {ctx.save();rd_path(top);ctx.clip();
+    const pad=[[-.25,-.76],[-.285,-.64],[-.275,.10],[-.225,.26],[.225,.26],[.275,.10],[.285,-.64],[.25,-.76]];
+    rd_path(pad.map(([x,z])=>P(x,z,.006)),SUIT,lw*.6,'rgba(21,43,48,.6)');
+    for(let z=-.58;z<.20;z+=.26)rd_line([P(-.21,z,.012),P(0,z-.035,.012),P(.21,z,.012)],'rgba(31,138,143,.3)',Math.max(.6,.013*s));
+    rd_path([[-.27,-.76],[.27,-.76],[.285,-.66],[-.285,-.66]].map(([x,z])=>P(x,z,.012)),'rgba(14,58,66,.6)');
+    rd_path([[-.31,.40],[0,.52],[.31,.40],[.25,.58],[0,.70],[-.25,.58]].map(([x,z])=>P(x,z,.012+rocker(z))),CORAL);
+    rd_line([P(0,.30,.012),P(0,.36,.012)],'rgba(21,43,48,.35)',Math.max(1,.02*s));
+    ctx.restore()}
+  // white rail highlight along the visible rail runs (30 % below the deck edge)
+  {ctx.strokeStyle='rgba(255,255,255,.9)';ctx.lineWidth=Math.max(1.2,.02*s);ctx.beginPath();let open=false;
+    for(let i=0;i<n;i++){const j=(i+1)%n;if(!vis[i]){open=false;continue}const x0=lerp(top[i].sx,bot[i].sx,.3),y0=lerp(top[i].sy,bot[i].sy,.3),x1=lerp(top[j].sx,bot[j].sx,.3),y1=lerp(top[j].sy,bot[j].sy,.3);
+      if(!open){ctx.moveTo(x0,y0);open=true}ctx.lineTo(x1,y1)}ctx.stroke()}
+  if(contact){const wash=RD_HULL.map(([x,z])=>{const p=world(x*1.08,z*1.035,0);return project(p.x,p.z,.012)});rd_line(wash.concat(wash.slice(0,1)),'rgba(244,248,245,'+(.72*contact).toFixed(3)+')',Math.max(.9,.026*s))}
+  // ---- rider: staggered surf stance, low crouch in the carve, hips over the inside rail (body tilt capped) ----
+  if(wipe){ctx.globalAlpha=1-clamp((q.t-.45)/.25,0,1);ctx.translate(mb.sx+q.side*2.2*wk*s,mb.sy-(1.6*wk-3.2*wk*wk)*s);ctx.rotate(q.side*wk*1.7);ctx.translate(-mb.sx,-mb.sy)}
+  ctx.translate(mb.sx,mb.sy);ctx.scale(1.08,1.08);ctx.translate(-mb.sx,-mb.sy);
+  const crouch=q&&q.kind==='close'?clamp(q.t/.3,0,1)*.23:0;
+  const hipY=.83-.17*carve-crouch,hipX=.02+lean*.09,bodyX=hipX+lean*.16,bodyZ=-.035+.06*carve;
+  const B=(x,y,z=0)=>P(bodyX+x*.955+z*.296,bodyZ-x*.296+z*.955,y);
+  const front={x:-.09,z:.15,angle:.62},rear={x:.09,z:-.35,angle:1.1};
+  function foot(f){const co=Math.cos(f.angle),si=Math.sin(f.angle),L=(x,z,y)=>P(f.x+x*co+z*si,f.z-x*si+z*co,y);
+    rd_soft([[-.075,-.15],[-.092,-.02],[-.078,.14],[0,.195],[.082,.15],[.098,-.02],[.078,-.15]].map(([x,z])=>L(x+.03,z-.03,.004)),'rgba(21,43,48,.32)',0,.3);
+    rd_soft([[-.05,-.14],[-.067,-.07],[-.069,.08],[-.046,.15],[-.01,.168],[.03,.16],[.06,.13],[.069,.06],[.06,-.12]].map(([x,z])=>L(x,z,.02)),SKIN,lw,.25);
+    rd_line([L(-.03,.17,.03),L(-.027,.11,.03)],INK,lw*.7);rd_line([L(.014,.172,.03),L(.017,.112,.03)],INK,lw*.7)}
+  const kneeY=.44-.04*carve-crouch*.35;
+  const frontHip=P(hipX-.11,.04,hipY),rearHip=P(hipX+.11,-.17,hipY),frontKnee=P(.13+lean*.08,.26,kneeY),rearKnee=P(.27+lean*.08,-.25,kneeY-.03);
+  const frontAnkle=P(front.x,front.z,.08),rearAnkle=P(rear.x,rear.z,.08);
+  foot(front);rd_limb([frontHip,frontKnee,frontAnkle],[.127,.098,.069],SKIN,lw);
+  rd_limb([frontHip,P(lerp(hipX-.11,.13+lean*.08,.56),lerp(.04,.26,.56),lerp(hipY,kneeY,.56))],[.144,.121],SUIT,lw);
+  foot(rear);rd_limb([rearHip,rearKnee,rearAnkle],[.132,.104,.075],SKIN,lw);
+  rd_limb([rearHip,P(lerp(hipX+.11,.27+lean*.08,.56),lerp(-.17,-.25,.56),lerp(hipY,kneeY-.03,.56))],[.15,.127],SUIT,lw);
+  rd_soft([P(hipX-.17,.02,hipY+.06),P(hipX+.17,-.21,hipY+.06),P(hipX+.18,-.22,hipY-.10),P(hipX+.04,-.12,hipY-.18),P(hipX-.15,.01,hipY-.13)],SUIT,lw);
+  const extL=.15+.85*Math.max(lean,0),extR=.18+.82*Math.max(-lean,0),armY=hipY+.47;
+  const left=[B(-.22,armY),B(-.37-extL*.13,hipY+.33+extL*.11,.03),B(-.39-extL*.31,hipY+.24+extL*.22,.17)];
+  const right=[B(.22,armY),B(.40+extR*.13,hipY+.31+extR*.13,-.025),B(.49+extR*.24,hipY+.15+extR*.30,.09)];
+  rd_limb(left,[.098,.078,.064],SKIN,lw);
+  rd_limb([left[0],B(-.30,hipY+.405,.012)],[.104,.092],SUIT,lw);
+  const torso=[[-.18,0],[-.215,.18],[-.245,.43],[-.19,.55],[.17,.55],[.255,.44],[.22,.19],[.185,.01]];
+  rd_soft(torso.map(([x,y])=>B(x,hipY+y)),SUIT,lw);
+  const vest=[[-.165,.025],[-.185,.23],[-.19,.45],[-.125,.525],[.115,.525],[.195,.43],[.175,.22],[.155,.025]];
+  rd_soft(vest.map(([x,y])=>B(x,hipY+y,.018)),CORAL,lw*.7);
+  rd_path([[.10,.045],[.155,.04],[.18,.40],[.115,.495]].map(([x,y])=>B(x,hipY+y,.025)),'rgba(21,43,48,.18)');
+  rd_line([B(-.165,hipY+.35,.03),B(.165,hipY+.35,.03)],SUN,Math.max(1.3,.046*s));
+  rd_line([B(0,hipY+.46,.04),B(0,hipY+.09,.04)],'rgba(21,43,48,.5)',Math.max(.7,.013*s));
+  rd_line([B(-.145,hipY+.06,.04),B(.145,hipY+.06,.04)],INK,Math.max(1,.024*s));
+  rd_limb(right,[.099,.078,.067],SKIN,lw);
+  rd_limb([right[0],B(.31,hipY+.40,-.015)],[.104,.092],SUIT,lw);
+  rd_dot(right[2],.075*s,SKIN,lw);
+  rd_dot(left[2],.075*s,SKIN,lw);
+  // The yellow remote in the front hand: wrist loop, body, screen, thumb over the trigger.
+  {const hand=left[2],wr=left[1];ctx.save();ctx.translate(hand.sx,hand.sy);ctx.rotate(-.3+lean*.2);
+    ctx.strokeStyle=INK;ctx.lineWidth=Math.max(1,.02*s);ctx.beginPath();ctx.moveTo(0,.02*s);ctx.lineTo((wr.sx-hand.sx)*.35,(wr.sy-hand.sy)*.35);ctx.stroke();
+    rrect(-.048*s,-.125*s,.096*s,.19*s,.03*s);ctx.fillStyle=SUN;ctx.fill();ctx.strokeStyle=INK;ctx.lineWidth=lw*.8;ctx.stroke();
+    ctx.fillStyle=INK;rrect(-.028*s,-.1*s,.056*s,.05*s,.012*s);ctx.fill();
+    ctx.fillStyle=SKIN;ctx.beginPath();ctx.ellipse(.03*s,.0*s,.032*s,.05*s,-.3,0,7);ctx.fill();ctx.strokeStyle=INK;ctx.lineWidth=lw*.6;ctx.stroke();ctx.restore()}
+  rd_limb([B(0,hipY+.51),B(.012,hipY+.69)],[.075,.069],SKIN,lw);
+  const headX=bodyX,headZ=bodyZ+.035,headY=hipY+.80;
+  const HP=(x,y,z=0)=>P(headX+x+lean*y*.06,headZ+z,headY+y);
+  // Forward brim sits behind the crown in this rear camera; the nape has no face.
+  rd_path([HP(-.15,.10,.05),HP(-.125,.085,.30),HP(.14,.085,.30),HP(.16,.10,.05)],SUN,lw*.85);
+  const head=[];for(let i=0;i<24;i++){const a=i/24*2*Math.PI;head.push(HP(.145*Math.cos(a),.18*Math.sin(a)))}rd_path(head,SKIN,lw);
+  rd_soft([HP(-.13,-.01),HP(-.11,-.085),HP(-.075,-.11),HP(.07,-.105),HP(.125,-.07),HP(.13,-.01)],SUIT,0);
+  for(const [side,dy] of [[-1,-.008],[1,0]]){const e=[];for(let i=0;i<12;i++){const a=i/12*2*Math.PI;e.push(HP(side*.147+.027*Math.cos(a),-.05+dy+.045*Math.sin(a)))}rd_path(e,SKIN,lw*.6)}
+  const cap=[];for(let i=0;i<=16;i++){const a=Math.PI-i/16*Math.PI;cap.push(HP(.158*Math.cos(a),-.025+.225*Math.sin(a)))}cap.push(HP(.135,-.07),HP(-.135,-.07));rd_soft(cap,SUN,lw,.12);
+  rd_line([HP(0,.19),HP(-.016,.10),HP(-.012,-.005)],'rgba(21,43,48,.36)',lw*.5);
+  rd_soft([HP(-.06,-.078),HP(-.056,-.025),HP(0,-.006),HP(.056,-.025),HP(.06,-.078)],SUIT,lw*.6,.3);
+  rd_line([HP(-.06,-.064),HP(.055,-.064)],SUN,lw*1.15);
+  ctx.restore();
 }
 function drawSpray(){for(const p of S.spray){const q=project(p.x,p.z,p.y);if(!q)continue;const k=p.age/p.life,r=Math.min(14,Math.max(1,p.r*q.s*(1-k*0.4)));if(q.sx<-10||q.sx>W+10||q.sy>H+10)continue;
   ctx.beginPath();ctx.arc(q.sx,q.sy,r,0,7);ctx.fillStyle='rgba(255,255,255,'+(0.95-k*0.7)+')';ctx.fill();if(r>2.5){ctx.lineWidth=0.8;ctx.strokeStyle='rgba(21,43,48,.4)';ctx.stroke()}}}
